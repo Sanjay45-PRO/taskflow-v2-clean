@@ -573,7 +573,7 @@
       <li><a href="#sectionTasks"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg> My Tasks</a></li>
       <li><a href="#sectionMarksheet"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg> Bulk Tasks</a></li>
       <li><a href="#sectionEmployees"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21v-1a6 6 0 0 1 6-6h4a6 6 0 0 1 6 6v1"/></svg> Employees</a></li>
-      <li><a href="#sectionMarksheet"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg> Reports</a></li>
+      <li><a href="#sectionKmReport"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg> Reports</a></li>
       <li><a href="#sectionUsage"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg> Activity</a></li>
       <li><a href="#sectionAttendance"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></svg> Attendance</a></li>
       <li><a href="#sectionLiveMap"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 20l-5.447-2.724A1 1 0 0 1 3 16.382V5.618a1 1 0 0 1 1.447-.894L9 7m0 13 6-3m-6 3V7m6 10 4.553 2.276A1 1 0 0 0 21 18.382V7.618a1 1 0 0 0-.553-.894L15 4m0 13V4m0 0L9 7"/></svg> Live Map</a></li>
@@ -748,6 +748,28 @@
         <h2 id="sectionDevices"><span style="color:var(--primary)display:inline-flex;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg></span> Registered devices</h2>
         <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 14px;">Every phone that has completed device verification for each employee. Revoke a device to force it through verification again on next login.</p>
         <div id="devicesList"><div class="empty-state">Loading devices…</div></div>
+      </div>
+
+      <!-- ============ DISTANCE & ATTENDANCE REPORT ============ -->
+      <div class="panel" style="margin-top:22px;">
+        <h2 id="sectionKmReport"><span style="color:var(--primary)display:inline-flex;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-3px;"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 21V9"/></svg></span> Distance & attendance report</h2>
+        <p style="font-size:12.5px;color:var(--text-muted);margin:-8px 0 14px;">Total km, hours, and days present per employee for any date range.</p>
+
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+          <button class="btn-sm" onclick="setReportRange('week')">This week</button>
+          <button class="btn-sm" onclick="setReportRange('lastweek')">Last week</button>
+          <button class="btn-sm" onclick="setReportRange('month')">This month</button>
+          <button class="btn-sm" onclick="setReportRange('lastmonth')">Last month</button>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">
+          <input type="date" id="reportFrom" />
+          <span style="color:var(--text-muted);">to</span>
+          <input type="date" id="reportTo" />
+          <button class="btn-sm" onclick="loadKmReport()">Generate</button>
+          <button class="btn-sm" id="downloadReportBtn" onclick="downloadKmReportCsv()" style="margin-left:auto;">Download CSV</button>
+        </div>
+
+        <div id="kmReportTable"><div class="empty-state">Pick a range and click Generate.</div></div>
       </div>
 
       <div class="panel" style="margin-top:22px;">

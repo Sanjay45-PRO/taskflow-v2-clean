@@ -1276,6 +1276,123 @@ async function reviewOnDuty(id, status){
   loadOnDuty();
 }
 
+function toDateStr(d){ return d.toISOString().slice(0,10); }
+
+function setReportRange(preset){
+  const now = new Date();
+  let from, to;
+  if (preset === 'week'){
+    const day = now.getDay() === 0 ? 7 : now.getDay();
+    from = new Date(now); from.setDate(now.getDate() - day + 1);
+    to = now;
+  } else if (preset === 'lastweek'){
+    const day = now.getDay() === 0 ? 7 : now.getDay();
+    to = new Date(now); to.setDate(now.getDate() - day);
+    from = new Date(to); from.setDate(to.getDate() - 6);
+  } else if (preset === 'month'){
+    from = new Date(now.getFullYear(), now.getMonth(), 1);
+    to = now;
+  } else if (preset === 'lastmonth'){
+    from = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    to = new Date(now.getFullYear(), now.getMonth(), 0);
+  }
+  document.getElementById('reportFrom').value = toDateStr(from);
+  document.getElementById('reportTo').value = toDateStr(to);
+  loadKmReport();
+}
+
+let lastKmReportRows = [];
+
+async function loadKmReport(){
+  const from = document.getElementById('reportFrom').value;
+  const to = document.getElementById('reportTo').value;
+  const container = document.getElementById('kmReportTable');
+  if (!from || !to){ container.innerHTML = '<div class="empty-state">Pick a start and end date.</div>'; return; }
+
+  container.innerHTML = '<div class="empty-state">Loading…</div>';
+
+  const fromIso = `${from}T00:00:00`;
+  const toIso = `${to}T23:59:59`;
+
+  const [{ data: locs }, { data: att }] = await Promise.all([
+    supabaseClient.from('location_logs').select('employee_name, latitude, longitude, recorded_at')
+      .eq('team', session.team).gte('recorded_at', fromIso).lte('recorded_at', toIso).order('recorded_at', { ascending: true }),
+    supabaseClient.from('attendance').select('employee_name, check_in_at, check_out_at, work_date')
+      .eq('team', session.team).gte('work_date', from).lte('work_date', to)
+  ]);
+
+  const byEmployee = {};
+  (locs || []).forEach(p => {
+    if (!byEmployee[p.employee_name]) byEmployee[p.employee_name] = { points: [], daysPresent: new Set(), hrs: 0 };
+    byEmployee[p.employee_name].points.push(p);
+  });
+  (att || []).forEach(a => {
+    if (!byEmployee[a.employee_name]) byEmployee[a.employee_name] = { points: [], daysPresent: new Set(), hrs: 0 };
+    byEmployee[a.employee_name].daysPresent.add(a.work_date);
+    if (a.check_in_at){
+      const start = new Date(a.check_in_at);
+      const end = a.check_out_at ? new Date(a.check_out_at) : new Date();
+      byEmployee[a.employee_name].hrs += Math.max(0, (end - start) / 36e5);
+    }
+  });
+
+  const names = Object.keys(byEmployee).sort();
+  if (!names.length){
+    container.innerHTML = '<div class="empty-state">No data in this range.</div>';
+    lastKmReportRows = [];
+    return;
+  }
+
+  lastKmReportRows = names.map(name => {
+    const e = byEmployee[name];
+    let km = 0;
+    const pts = e.points.sort((a,b) => new Date(a.recorded_at) - new Date(b.recorded_at));
+    for (let i = 1; i < pts.length; i++){
+      km += haversineKm(pts[i-1].latitude, pts[i-1].longitude, pts[i].latitude, pts[i].longitude);
+    }
+    return { name, km: Math.round(km * 10) / 10, hrs: Math.round(e.hrs * 10) / 10, daysPresent: e.daysPresent.size };
+  });
+
+  container.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+      <thead>
+        <tr style="text-align:left;border-bottom:2px solid var(--border);">
+          <th style="padding:8px 6px;">Employee</th>
+          <th style="padding:8px 6px;">Total km</th>
+          <th style="padding:8px 6px;">Total hours</th>
+          <th style="padding:8px 6px;">Days present</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${lastKmReportRows.map(r => `
+          <tr style="border-bottom:1px solid var(--border);">
+            <td style="padding:8px 6px;font-weight:600;">${escapeHtml(r.name)}</td>
+            <td style="padding:8px 6px;">${r.km} km</td>
+            <td style="padding:8px 6px;">${r.hrs} hrs</td>
+            <td style="padding:8px 6px;">${r.daysPresent}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+function downloadKmReportCsv(){
+  if (!lastKmReportRows.length){ alert('Generate a report first.'); return; }
+  const from = document.getElementById('reportFrom').value;
+  const to = document.getElementById('reportTo').value;
+  const rows = [['Employee','Total km','Total hours','Days present'],
+    ...lastKmReportRows.map(r => [r.name, r.km, r.hrs, r.daysPresent])];
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `taskflow-report-${from}-to-${to}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 async function loadDevices(){
   const container = document.getElementById('devicesList');
   const { data, error } = await supabaseClient.functions.invoke('device-auth', {
