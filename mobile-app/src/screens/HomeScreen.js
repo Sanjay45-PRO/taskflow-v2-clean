@@ -303,15 +303,26 @@ export default function HomeScreen({ navigation }) {
         <Text style={styles.cardLabel}>
           {isCheckedIn ? 'You are checked in' : today?.check_out_at ? 'Checked out for today' : 'Not checked in yet'}
         </Text>
-        <TouchableOpacity
-          style={[styles.bigBtn, isCheckedIn ? styles.bigBtnRed : styles.bigBtnGreen]}
-          onPress={isCheckedIn ? handleCheckOut : handleCheckIn}
-          disabled={busy || !!today?.check_out_at}
-        >
-          {busy ? <ActivityIndicator color="#fff" /> : (
-            <Text style={styles.bigBtnText}>{isCheckedIn ? 'Check Out' : 'Check In'}</Text>
-          )}
-        </TouchableOpacity>
+        <View style={styles.btnRow}>
+          <TouchableOpacity
+            style={[styles.halfBtn, styles.bigBtnGreen, (isCheckedIn || busy) && styles.btnDisabled]}
+            onPress={handleCheckIn}
+            disabled={busy || isCheckedIn}
+          >
+            {busy && !isCheckedIn ? <ActivityIndicator color="#fff" /> : (
+              <Text style={styles.bigBtnText}>Check In</Text>
+            )}
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.halfBtn, styles.bigBtnRed, (!isCheckedIn || busy) && styles.btnDisabled]}
+            onPress={handleCheckOut}
+            disabled={busy || !isCheckedIn}
+          >
+            {busy && isCheckedIn ? <ActivityIndicator color="#fff" /> : (
+              <Text style={styles.bigBtnText}>Check Out</Text>
+            )}
+          </TouchableOpacity>
+        </View>
         {isCheckedIn && (
           <View style={styles.trackingBadge}>
             <View style={styles.trackingDot} />
@@ -367,6 +378,9 @@ const styles = StyleSheet.create({
   card: { backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 16, alignItems: 'center', elevation: 2 },
   cardLabel: { fontSize: 14, color: '#64748B', marginBottom: 14 },
   bigBtn: { width: '100%', paddingVertical: 18, borderRadius: 14, alignItems: 'center' },
+  btnRow: { flexDirection: 'row', gap: 12 },
+  halfBtn: { flex: 1, paddingVertical: 18, borderRadius: 14, alignItems: 'center' },
+  btnDisabled: { opacity: 0.35 },
   bigBtnGreen: { backgroundColor: '#16A34A' },
   bigBtnRed: { backgroundColor: '#DC2626' },
   bigBtnText: { color: '#fff', fontWeight: '700', fontSize: 17 },
