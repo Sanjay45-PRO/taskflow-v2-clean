@@ -482,14 +482,19 @@ async function assignTask(){
     alert('Please set a due date for this task — it is required.');
     return;
   }
-  await supabaseClient.from('tasks').insert({
+  const { error } = await supabaseClient.from('tasks').insert({
     team: session.team,
     title, description: desc, assignee,
     due,
     status: 'pending',
     created_by: session.name
   });
+  if (error) {
+    alert('Could not assign task: ' + error.message);
+    return;
+  }
   closeAssignModal();
+  await loadTasksOnce();
 }
 
 /* ---------------- Bulk task assignment (additive feature) ---------------- */
@@ -1496,7 +1501,8 @@ function renderTickets(){
 }
 
 async function updateTicketStatus(id, status){
-  await supabaseClient.from('tickets').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+  const { error } = await supabaseClient.from('tickets').update({ status, updated_at: new Date().toISOString() }).eq('id', id);
+  if (error) { alert('Could not update ticket status: ' + error.message); console.error(error); }
 }
 
 /* ---------------- Utilities ---------------- */
