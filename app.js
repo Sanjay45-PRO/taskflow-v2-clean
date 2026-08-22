@@ -1120,7 +1120,7 @@ async function loadLiveMap(){
   }
   statsEl.innerHTML = statRows.join('');
 
-  if (allBounds.length) liveMapInstance.fitBounds(allBounds, { padding: [30, 30] });
+  if (allBounds.length) liveMapInstance.fitBounds(allBounds, { padding: [30, 30], maxZoom: 15 });
   setTimeout(() => liveMapInstance.invalidateSize(), 200);
 
   if (liveMapAutoRefresh) clearInterval(liveMapAutoRefresh);
