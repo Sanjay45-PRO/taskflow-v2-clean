@@ -1366,7 +1366,7 @@ async function loadKmReport(){
   const container = document.getElementById('kmReportTable');
   if (!from || !to){ container.innerHTML = '<div class="empty-state">Pick a start and end date.</div>'; return; }
 
-  container.innerHTML = '<div class="empty-state">Loading…</div>';
+  container.innerHTML = '<div class="empty-state">Loading… (fetching place names, this can take a moment for long ranges)</div>';
 
   const fromIso = `${from}T00:00:00`;
   const toIso = `${to}T23:59:59`;
@@ -1378,55 +1378,98 @@ async function loadKmReport(){
       .eq('team', session.team).gte('work_date', from).lte('work_date', to)
   ]);
 
-  const byEmployee = {};
+  // Group location points by employee + calendar day
+  const byEmployeeDay = {}; // key: "name||date" -> points[]
   (locs || []).forEach(p => {
-    if (!byEmployee[p.employee_name]) byEmployee[p.employee_name] = { points: [], daysPresent: new Set(), hrs: 0 };
-    byEmployee[p.employee_name].points.push(p);
-  });
-  (att || []).forEach(a => {
-    if (!byEmployee[a.employee_name]) byEmployee[a.employee_name] = { points: [], daysPresent: new Set(), hrs: 0 };
-    byEmployee[a.employee_name].daysPresent.add(a.work_date);
-    if (a.check_in_at){
-      const start = new Date(a.check_in_at);
-      const end = a.check_out_at ? new Date(a.check_out_at) : new Date();
-      byEmployee[a.employee_name].hrs += Math.max(0, (end - start) / 36e5);
-    }
+    const day = p.recorded_at.slice(0, 10);
+    const key = `${p.employee_name}||${day}`;
+    if (!byEmployeeDay[key]) byEmployeeDay[key] = [];
+    byEmployeeDay[key].push(p);
   });
 
-  const names = Object.keys(byEmployee).sort();
-  if (!names.length){
-    container.innerHTML = '<div class="empty-state">No data in this range.</div>';
-    lastKmReportRows = [];
-    return;
-  }
+  const attByKey = {};
+  (att || []).forEach(a => { attByKey[`${a.employee_name}||${a.work_date}`] = a; });
 
-  lastKmReportRows = names.map(name => {
-    const e = byEmployee[name];
+  // Union of every employee+day that has either location points or an attendance row
+  const allKeys = new Set([...Object.keys(byEmployeeDay), ...Object.keys(attByKey)]);
+
+  const dayRows = [];
+  for (const key of allKeys){
+    const [name, day] = key.split('||');
+    const pts = (byEmployeeDay[key] || []).sort((a,b) => new Date(a.recorded_at) - new Date(b.recorded_at));
+    const a = attByKey[key];
+
     let km = 0;
-    const pts = e.points.sort((a,b) => new Date(a.recorded_at) - new Date(b.recorded_at));
     for (let i = 1; i < pts.length; i++){
       km += haversineKm(pts[i-1].latitude, pts[i-1].longitude, pts[i].latitude, pts[i].longitude);
     }
-    return { name, km: Math.round(km * 10) / 10, hrs: Math.round(e.hrs * 10) / 10, daysPresent: e.daysPresent.size };
+    let hrs = 0;
+    if (a && a.check_in_at){
+      const start = new Date(a.check_in_at);
+      const end = a.check_out_at ? new Date(a.check_out_at) : new Date();
+      hrs = Math.max(0, (end - start) / 36e5);
+    }
+
+    let startLabel = '—', endLabel = '—';
+    if (pts.length){
+      startLabel = await reverseGeocode(pts[0].latitude, pts[0].longitude);
+      endLabel = pts.length > 1 ? await reverseGeocode(pts[pts.length-1].latitude, pts[pts.length-1].longitude) : startLabel;
+    }
+
+    dayRows.push({ name, day, startLabel, endLabel, km: Math.round(km * 10) / 10, hrs: Math.round(hrs * 10) / 10 });
+  }
+
+  dayRows.sort((x, y) => x.name === y.name ? x.day.localeCompare(y.day) : x.name.localeCompare(y.name));
+  lastKmReportRows = dayRows;
+
+  if (!dayRows.length){
+    container.innerHTML = '<div class="empty-state">No data in this range.</div>';
+    return;
+  }
+
+  // Summary totals per employee, shown above the daily table
+  const totals = {};
+  dayRows.forEach(r => {
+    if (!totals[r.name]) totals[r.name] = { km: 0, hrs: 0, days: 0 };
+    totals[r.name].km += r.km;
+    totals[r.name].hrs += r.hrs;
+    if (r.km > 0 || r.hrs > 0) totals[r.name].days += 1;
   });
 
   container.innerHTML = `
-    <table style="width:100%;border-collapse:collapse;font-size:13.5px;">
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:20px;">
       <thead>
         <tr style="text-align:left;border-bottom:2px solid var(--border);">
-          <th style="padding:8px 6px;">Employee</th>
-          <th style="padding:8px 6px;">Total km</th>
-          <th style="padding:8px 6px;">Total hours</th>
-          <th style="padding:8px 6px;">Days present</th>
+          <th style="padding:6px;">Employee</th><th style="padding:6px;">Total km</th><th style="padding:6px;">Total hrs</th><th style="padding:6px;">Days active</th>
         </tr>
       </thead>
       <tbody>
-        ${lastKmReportRows.map(r => `
+        ${Object.keys(totals).sort().map(name => `
+          <tr style="border-bottom:1px solid var(--border);font-weight:600;">
+            <td style="padding:6px;">${escapeHtml(name)}</td>
+            <td style="padding:6px;">${totals[name].km.toFixed(1)} km</td>
+            <td style="padding:6px;">${totals[name].hrs.toFixed(1)} hrs</td>
+            <td style="padding:6px;">${totals[name].days}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+
+    <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+      <thead>
+        <tr style="text-align:left;border-bottom:2px solid var(--border);">
+          <th style="padding:6px;">Employee</th><th style="padding:6px;">Date</th><th style="padding:6px;">Start location</th><th style="padding:6px;">End location</th><th style="padding:6px;">Km</th><th style="padding:6px;">Hours</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${dayRows.map(r => `
           <tr style="border-bottom:1px solid var(--border);">
-            <td style="padding:8px 6px;font-weight:600;">${escapeHtml(r.name)}</td>
-            <td style="padding:8px 6px;">${r.km} km</td>
-            <td style="padding:8px 6px;">${r.hrs} hrs</td>
-            <td style="padding:8px 6px;">${r.daysPresent}</td>
+            <td style="padding:6px;">${escapeHtml(r.name)}</td>
+            <td style="padding:6px;">${r.day}</td>
+            <td style="padding:6px;max-width:220px;">${escapeHtml(r.startLabel)}</td>
+            <td style="padding:6px;max-width:220px;">${escapeHtml(r.endLabel)}</td>
+            <td style="padding:6px;">${r.km} km</td>
+            <td style="padding:6px;">${r.hrs} hrs</td>
           </tr>
         `).join('')}
       </tbody>
@@ -1438,8 +1481,8 @@ function downloadKmReportCsv(){
   if (!lastKmReportRows.length){ alert('Generate a report first.'); return; }
   const from = document.getElementById('reportFrom').value;
   const to = document.getElementById('reportTo').value;
-  const rows = [['Employee','Total km','Total hours','Days present'],
-    ...lastKmReportRows.map(r => [r.name, r.km, r.hrs, r.daysPresent])];
+  const rows = [['Employee','Date','Start location','End location','Km','Hours'],
+    ...lastKmReportRows.map(r => [r.name, r.day, r.startLabel, r.endLabel, r.km, r.hrs])];
   const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
   const blob = new Blob([csv], { type: 'text/csv' });
   const url = URL.createObjectURL(blob);
