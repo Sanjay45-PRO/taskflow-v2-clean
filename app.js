@@ -935,6 +935,7 @@ async function loadAttendance(){
 
 /* ---------------- Live Map (manager only) — free OpenStreetMap/Leaflet ---------------- */
 let liveMapInstance = null;
+let liveMapMarkers = [];
 const MAP_COLORS = ['#2563EB', '#DC2626', '#16A34A', '#F59E0B', '#7C3AED', '#0FA3B1', '#EC4899', '#64748B'];
 
 function haversineKm(lat1, lon1, lat2, lon2){
@@ -1025,12 +1026,13 @@ async function loadLiveMap(){
   const statsEl = document.getElementById('mapStats');
 
   if (!liveMapInstance){
-    liveMapInstance = L.map('liveMap').setView([20.5937, 78.9629], 5);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; OpenStreetMap contributors &copy; CARTO', maxZoom: 19, subdomains: 'abcd'
-    }).addTo(liveMapInstance);
+    liveMapInstance = new google.maps.Map(document.getElementById('liveMap'), {
+      center: { lat: 20.5937, lng: 78.9629 }, zoom: 5, mapId: 'TASKFLOW_LIVE_MAP'
+    });
+    liveMapMarkers = [];
   }
-  liveMapInstance.eachLayer(layer => { if (layer instanceof L.Polyline || layer instanceof L.CircleMarker || layer instanceof L.Marker) liveMapInstance.removeLayer(layer); });
+  (liveMapMarkers || []).forEach(m => m.setMap ? m.setMap(null) : (m.map = null));
+  liveMapMarkers = [];
 
   if (!points || !points.length){
     legendEl.innerHTML = isToday ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--danger);"><span style="width:7px;height:7px;border-radius:50%;background:var(--danger);animation:pulseLive 1.5s infinite;"></span>LIVE · updates every 30s</span>` : '';
@@ -1043,7 +1045,7 @@ async function loadLiveMap(){
   const byPerson = {};
   points.forEach(p => { (byPerson[p.employee_name] = byPerson[p.employee_name] || []).push(p); });
   const names = Object.keys(byPerson);
-  const allBounds = [];
+  const bounds = new google.maps.LatLngBounds();
 
   legendEl.innerHTML = names.map((name, i) => `
     <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);">
@@ -1061,19 +1063,40 @@ async function loadLiveMap(){
     const color = MAP_COLORS[i % MAP_COLORS.length];
 
     const roadPath = await snapToRoads(latlngs);
-    L.polyline(roadPath, { color, weight: 4, opacity: 0.8 }).addTo(liveMapInstance);
+    const polyline = new google.maps.Polyline({
+      path: roadPath.map(([lat, lng]) => ({ lat, lng })),
+      geodesic: true, strokeColor: color, strokeOpacity: 0.85, strokeWeight: 4
+    });
+    polyline.setMap(liveMapInstance);
+    liveMapMarkers.push(polyline);
 
-    const startIcon = L.divIcon({ className: '', html: `<div style="width:16px;height:16px;border-radius:50%;background:#16A34A;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);"></div>`, iconSize: [16,16], iconAnchor: [8,8] });
-    const endIcon = L.divIcon({ className: '', html: `<div style="width:16px;height:16px;border-radius:50%;background:#DC2626;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);"></div>`, iconSize: [16,16], iconAnchor: [8,8] });
-    L.marker(latlngs[0], { icon: startIcon }).bindTooltip(`${name} — start`).addTo(liveMapInstance);
-    if (latlngs.length > 1) L.marker(latlngs[latlngs.length - 1], { icon: endIcon }).bindTooltip(`${name} — latest`).addTo(liveMapInstance);
-    allBounds.push(...latlngs);
+    function pin(fillColor){
+      return { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 3 };
+    }
 
-    // Stop markers — small orange dots wherever they stayed put for 15+ min
+    const startMarker = new google.maps.Marker({
+      position: { lat: latlngs[0][0], lng: latlngs[0][1] }, map: liveMapInstance,
+      icon: pin('#16A34A'), title: `${name} — start`
+    });
+    liveMapMarkers.push(startMarker);
+
+    if (latlngs.length > 1){
+      const endMarker = new google.maps.Marker({
+        position: { lat: latlngs[latlngs.length-1][0], lng: latlngs[latlngs.length-1][1] }, map: liveMapInstance,
+        icon: pin('#DC2626'), title: `${name} — latest`
+      });
+      liveMapMarkers.push(endMarker);
+    }
+    latlngs.forEach(([lat,lng]) => bounds.extend({ lat, lng }));
+
     const timeFmtShort = d => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     stops.forEach(s => {
-      const stopIcon = L.divIcon({ className: '', html: `<div style="width:14px;height:14px;border-radius:4px;background:#F59E0B;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);"></div>`, iconSize: [14,14], iconAnchor: [7,7] });
-      L.marker([s.lat, s.lng], { icon: stopIcon }).bindTooltip(`${name} — stopped ${Math.round(s.durationMin)} min (${timeFmtShort(s.start)}–${timeFmtShort(s.end)})`).addTo(liveMapInstance);
+      const stopMarker = new google.maps.Marker({
+        position: { lat: s.lat, lng: s.lng }, map: liveMapInstance,
+        icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#F59E0B', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 },
+        title: `${name} — stopped ${Math.round(s.durationMin)} min (${timeFmtShort(s.start)}–${timeFmtShort(s.end)})`
+      });
+      liveMapMarkers.push(stopMarker);
     });
 
     let distanceKm = 0;
@@ -1083,7 +1106,6 @@ async function loadLiveMap(){
 
     const suspiciousPts = rawPts.filter(p => p.is_suspicious);
 
-    // Prefer actual check-in/check-out times over first/last GPS ping, so this matches attendance exactly
     const att = attByName[name];
     const checkIn = att && att.check_in_at ? new Date(att.check_in_at) : new Date(pts[0].recorded_at);
     const checkOut = att && att.check_out_at ? new Date(att.check_out_at) : new Date(pts[pts.length - 1].recorded_at);
@@ -1120,8 +1142,12 @@ async function loadLiveMap(){
   }
   statsEl.innerHTML = statRows.join('');
 
-  if (allBounds.length) liveMapInstance.fitBounds(allBounds, { padding: [30, 30], maxZoom: 15 });
-  setTimeout(() => liveMapInstance.invalidateSize(), 200);
+  if (!bounds.isEmpty()){
+    liveMapInstance.fitBounds(bounds, 30);
+    const listener = google.maps.event.addListenerOnce(liveMapInstance, 'bounds_changed', () => {
+      if (liveMapInstance.getZoom() > 16) liveMapInstance.setZoom(16);
+    });
+  }
 
   if (liveMapAutoRefresh) clearInterval(liveMapAutoRefresh);
   if (isToday){
