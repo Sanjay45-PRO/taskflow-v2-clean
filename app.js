@@ -934,6 +934,28 @@ async function loadAttendance(){
 }
 
 /* ---------------- Live Map (manager only) — free OpenStreetMap/Leaflet ---------------- */
+const geocodeCache = {};
+async function reverseGeocode(lat, lng){
+  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  if (geocodeCache[key]) return geocodeCache[key];
+  try {
+    const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=AIzaSyB7lzXCc4HRngQU1RwRlAMRrKtNFNjgyzE`);
+    const data = await res.json();
+    let label = 'Unknown location';
+    if (data.results && data.results.length){
+      // Prefer a locality-level result over an ultra-precise plus-code result
+      const best = data.results.find(r => r.types.includes('point_of_interest') || r.types.includes('premise'))
+        || data.results.find(r => r.types.includes('street_address') || r.types.includes('route'))
+        || data.results[0];
+      label = best.formatted_address;
+    }
+    geocodeCache[key] = label;
+    return label;
+  } catch (e) {
+    return 'Unknown location';
+  }
+}
+
 let liveMapInstance = null;
 let liveMapMarkers = [];
 const MAP_COLORS = ['#2563EB', '#DC2626', '#16A34A', '#F59E0B', '#7C3AED', '#0FA3B1', '#EC4899', '#64748B'];
@@ -1112,6 +1134,11 @@ async function loadLiveMap(){
     const activeHrs = Math.max(0, (checkOut - checkIn) / 36e5);
     const timeFmt = d => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
+    const startLabel = await reverseGeocode(latlngs[0][0], latlngs[0][1]);
+    const endLabel = latlngs.length > 1
+      ? await reverseGeocode(latlngs[latlngs.length-1][0], latlngs[latlngs.length-1][1])
+      : startLabel;
+
     statRows.push(`
       <div class="task-item">
         <div>
@@ -1121,6 +1148,10 @@ async function loadLiveMap(){
             <span><i class="ti ti-route"></i> ${distanceKm.toFixed(1)} km total</span>
             <span><i class="ti ti-clock"></i> ${activeHrs.toFixed(1)} hrs</span>
             <span><i class="ti ti-map-pin"></i> ${rawPts.length} points logged</span>
+          </div>
+          <div style="margin-top:6px;font-size:12.5px;color:var(--text-muted);line-height:1.7;">
+            <div><span style="color:#16A34A;font-weight:700;">●</span> Started near: ${escapeHtml(startLabel)}</div>
+            <div><span style="color:#DC2626;font-weight:700;">●</span> ${att && att.check_out_at ? 'Ended near' : 'Currently near'}: ${escapeHtml(endLabel)}</div>
           </div>
           ${suspiciousPts.length ? `
             <div style="margin-top:6px;font-size:12px;color:#991B1B;background:rgba(220,38,38,0.1);padding:4px 9px;border-radius:6px;display:inline-flex;align-items:center;gap:5px;width:fit-content;font-weight:600;">
