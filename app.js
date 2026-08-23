@@ -933,11 +933,24 @@ async function loadAttendance(){
   }).join('');
 }
 
-/* ---------------- Live Map (manager only) — free OpenStreetMap/Leaflet ---------------- */
+/* ---------------- Live Map (manager only) — Google Maps ---------------- */
 const geocodeCache = {};
 async function reverseGeocode(lat, lng){
-  const key = `${lat.toFixed(4)},${lng.toFixed(4)}`;
+  const latR = lat.toFixed(4), lngR = lng.toFixed(4);
+  const key = `${latR},${lngR}`;
   if (geocodeCache[key]) return geocodeCache[key];
+
+  // Check the permanent database cache first — a hit here costs nothing.
+  try {
+    const { data: cached } = await supabaseClient
+      .from('geocode_cache').select('label')
+      .eq('lat_rounded', latR).eq('lng_rounded', lngR).maybeSingle();
+    if (cached && cached.label){
+      geocodeCache[key] = cached.label;
+      return cached.label;
+    }
+  } catch (e) { /* cache miss or table not reachable — fall through to live lookup */ }
+
   try {
     const res = await fetch(`https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=AIzaSyDO1EYYqd5X8C_N_HSJ9L5XFJbcSTzDyzU`);
     const data = await res.json();
@@ -950,6 +963,11 @@ async function reverseGeocode(lat, lng){
       label = best.formatted_address;
     }
     geocodeCache[key] = label;
+    // Save permanently so this exact spot is never billed again
+    supabaseClient.from('geocode_cache').upsert(
+      { lat_rounded: latR, lng_rounded: lngR, label },
+      { onConflict: 'lat_rounded,lng_rounded' }
+    ).then(() => {});
     return label;
   } catch (e) {
     return 'Unknown location';
@@ -958,6 +976,7 @@ async function reverseGeocode(lat, lng){
 
 let liveMapInstance = null;
 let liveMapMarkers = [];
+let autoRefreshEnabled = true;
 const MAP_COLORS = ['#2563EB', '#DC2626', '#16A34A', '#F59E0B', '#7C3AED', '#0FA3B1', '#EC4899', '#64748B'];
 
 function haversineKm(lat1, lon1, lat2, lon2){
@@ -1060,7 +1079,7 @@ async function loadLiveMap(){
     legendEl.innerHTML = isToday ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--danger);"><span style="width:7px;height:7px;border-radius:50%;background:var(--danger);animation:pulseLive 1.5s infinite;"></span>LIVE · updates every 30s</span>` : '';
     statsEl.innerHTML = '<div class="empty-state">No location data for this day yet.</div>';
     if (liveMapAutoRefresh) clearInterval(liveMapAutoRefresh);
-    if (isToday) liveMapAutoRefresh = setInterval(loadLiveMap, 30000);
+    if (isToday && autoRefreshEnabled) liveMapAutoRefresh = setInterval(loadLiveMap, 30000);
     return;
   }
 
@@ -1181,7 +1200,7 @@ async function loadLiveMap(){
   }
 
   if (liveMapAutoRefresh) clearInterval(liveMapAutoRefresh);
-  if (isToday){
+  if (isToday && autoRefreshEnabled){
     liveMapAutoRefresh = setInterval(loadLiveMap, 30000);
   }
 }
@@ -1545,6 +1564,13 @@ function wireNewManagerSections(){
   document.getElementById('attendanceDate').addEventListener('change', loadAttendance);
   document.getElementById('mapDate').addEventListener('change', loadLiveMap);
   document.getElementById('refreshMapBtn').addEventListener('click', loadLiveMap);
+  document.getElementById('autoRefreshToggle').addEventListener('click', () => {
+    autoRefreshEnabled = !autoRefreshEnabled;
+    const btn = document.getElementById('autoRefreshToggle');
+    btn.textContent = `Auto-refresh: ${autoRefreshEnabled ? 'On' : 'Off'}`;
+    if (!autoRefreshEnabled && liveMapAutoRefresh) clearInterval(liveMapAutoRefresh);
+    else loadLiveMap();
+  });
   document.querySelectorAll('[data-claimf]').forEach(btn => {
     btn.addEventListener('click', () => {
       document.querySelectorAll('[data-claimf]').forEach(b => b.classList.remove('active'));
