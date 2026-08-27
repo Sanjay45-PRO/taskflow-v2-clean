@@ -1063,7 +1063,8 @@ async function loadLiveMap(){
   const { data: points } = await supabaseClient
     .from('location_logs').select('*').eq('team', session.team)
     .gte('recorded_at', startTs).lte('recorded_at', endTs)
-    .order('recorded_at', { ascending: true });
+    .order('recorded_at', { ascending: true })
+    .limit(50000);
 
   const { data: attRows } = await supabaseClient
     .from('attendance').select('*').eq('team', session.team).eq('work_date', date);
@@ -1459,7 +1460,7 @@ async function loadKmReport(){
 
   const [{ data: locs }, { data: att }] = await Promise.all([
     supabaseClient.from('location_logs').select('employee_name, latitude, longitude, recorded_at, is_suspicious')
-      .eq('team', session.team).gte('recorded_at', fromIso).lte('recorded_at', toIso).order('recorded_at', { ascending: true }),
+      .eq('team', session.team).gte('recorded_at', fromIso).lte('recorded_at', toIso).order('recorded_at', { ascending: true }).limit(200000),
     supabaseClient.from('attendance').select('employee_name, check_in_at, check_out_at, work_date')
       .eq('team', session.team).gte('work_date', from).lte('work_date', to)
   ]);
