@@ -975,8 +975,10 @@ async function reverseGeocode(lat, lng){
 }
 
 let liveMapInstance = null;
+let liveMapInfoWindow = null;
 let liveMapMarkers = [];
 let autoRefreshEnabled = true;
+let selectedMapEmployee = null; // null = show everyone; a name = show only that person
 const MAP_COLORS = ['#2563EB', '#DC2626', '#16A34A', '#F59E0B', '#7C3AED', '#0FA3B1', '#EC4899', '#64748B'];
 
 function haversineKm(lat1, lon1, lat2, lon2){
@@ -1045,6 +1047,11 @@ async function snapToRoads(latlngs){
 
 let liveMapAutoRefresh = null;
 
+function filterLiveMap(name){
+  selectedMapEmployee = name;
+  loadLiveMap();
+}
+
 async function loadLiveMap(){
   const dateInput = document.getElementById('mapDate');
   if (!dateInput.value) dateInput.value = new Date().toISOString().slice(0, 10);
@@ -1070,6 +1077,7 @@ async function loadLiveMap(){
     liveMapInstance = new google.maps.Map(document.getElementById('liveMap'), {
       center: { lat: 20.5937, lng: 78.9629 }, zoom: 5, mapId: 'TASKFLOW_LIVE_MAP'
     });
+    liveMapInfoWindow = new google.maps.InfoWindow();
     liveMapMarkers = [];
   }
   (liveMapMarkers || []).forEach(m => m.setMap ? m.setMap(null) : (m.map = null));
@@ -1083,25 +1091,40 @@ async function loadLiveMap(){
     return;
   }
 
-  const byPerson = {};
-  points.forEach(p => { (byPerson[p.employee_name] = byPerson[p.employee_name] || []).push(p); });
+  const byPersonAll = {};
+  points.forEach(p => { (byPersonAll[p.employee_name] = byPersonAll[p.employee_name] || []).push(p); });
+  const allNames = Object.keys(byPersonAll).sort();
+
+  // Filter down to just the selected person, if one is picked. Colors stay
+  // consistent per person regardless of filtering, based on their position
+  // in the FULL name list, not the filtered one.
+  const byPerson = selectedMapEmployee && byPersonAll[selectedMapEmployee]
+    ? { [selectedMapEmployee]: byPersonAll[selectedMapEmployee] }
+    : byPersonAll;
   const names = Object.keys(byPerson);
   const bounds = new google.maps.LatLngBounds();
 
-  legendEl.innerHTML = names.map((name, i) => `
-    <span style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-muted);">
-      <span style="width:10px;height:10px;border-radius:50%;background:${MAP_COLORS[i % MAP_COLORS.length]};display:inline-block;"></span>
+  legendEl.innerHTML = `
+    <button type="button" class="btn-sm" style="${!selectedMapEmployee ? 'background:var(--primary);color:#fff;border-color:var(--primary);' : ''}" onclick="filterLiveMap(null)">All</button>
+  ` + allNames.map((name) => {
+    const i = allNames.indexOf(name);
+    const isSelected = selectedMapEmployee === name;
+    return `
+    <button type="button" class="btn-sm" style="display:inline-flex;align-items:center;gap:6px;${isSelected ? `background:${MAP_COLORS[i % MAP_COLORS.length]};color:#fff;border-color:${MAP_COLORS[i % MAP_COLORS.length]};` : ''}" onclick="filterLiveMap('${escapeHtml(name).replace(/'/g,"\\'")}')">
+      <span style="width:10px;height:10px;border-radius:50%;background:${isSelected ? '#fff' : MAP_COLORS[i % MAP_COLORS.length]};display:inline-block;"></span>
       ${escapeHtml(name)}
-    </span>
-  `).join('') + (isToday ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--danger);margin-left:auto;"><span style="width:7px;height:7px;border-radius:50%;background:var(--danger);animation:pulseLive 1.5s infinite;"></span>LIVE · updates every 30s</span>` : '');
+    </button>
+  `;
+  }).join('') + (isToday ? `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;color:var(--danger);margin-left:auto;"><span style="width:7px;height:7px;border-radius:50%;background:var(--danger);animation:pulseLive 1.5s infinite;"></span>LIVE · updates every 30s</span>` : '');
 
   const statRows = [];
   for (let i = 0; i < names.length; i++){
     const name = names[i];
+    const colorIdx = allNames.indexOf(name);
     const rawPts = byPerson[name];
     const { cleaned: pts, stops } = detectStops(rawPts, 15, 40);
     const latlngs = pts.map(p => [p.latitude, p.longitude]);
-    const color = MAP_COLORS[i % MAP_COLORS.length];
+    const color = MAP_COLORS[colorIdx % MAP_COLORS.length];
 
     const roadPath = await snapToRoads(latlngs);
     const polyline = new google.maps.Polyline({
@@ -1111,14 +1134,27 @@ async function loadLiveMap(){
     polyline.setMap(liveMapInstance);
     liveMapMarkers.push(polyline);
 
+    const timeFmtShort = d => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
     function pin(fillColor){
       return { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor, fillOpacity: 1, strokeColor: '#fff', strokeWeight: 3 };
+    }
+
+    function openInfo(marker, html){
+      liveMapInfoWindow.setContent(html);
+      liveMapInfoWindow.open({ anchor: marker, map: liveMapInstance });
     }
 
     const startMarker = new google.maps.Marker({
       position: { lat: latlngs[0][0], lng: latlngs[0][1] }, map: liveMapInstance,
       icon: pin('#16A34A'), title: `${name} — start`
     });
+    startMarker.addListener('click', () => openInfo(startMarker, `
+      <div style="font-family:inherit;padding:2px 4px;">
+        <div style="font-weight:700;color:${color};margin-bottom:3px;">${escapeHtml(name)}</div>
+        <div style="font-size:12.5px;color:#475569;">Start point — ${timeFmtShort(pts[0].recorded_at)}</div>
+      </div>
+    `));
     liveMapMarkers.push(startMarker);
 
     if (latlngs.length > 1){
@@ -1126,17 +1162,28 @@ async function loadLiveMap(){
         position: { lat: latlngs[latlngs.length-1][0], lng: latlngs[latlngs.length-1][1] }, map: liveMapInstance,
         icon: pin('#DC2626'), title: `${name} — latest`
       });
+      endMarker.addListener('click', () => openInfo(endMarker, `
+        <div style="font-family:inherit;padding:2px 4px;">
+          <div style="font-weight:700;color:${color};margin-bottom:3px;">${escapeHtml(name)}</div>
+          <div style="font-size:12.5px;color:#475569;">Latest point — ${timeFmtShort(pts[pts.length-1].recorded_at)}</div>
+        </div>
+      `));
       liveMapMarkers.push(endMarker);
     }
     latlngs.forEach(([lat,lng]) => bounds.extend({ lat, lng }));
 
-    const timeFmtShort = d => new Date(d).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     stops.forEach(s => {
       const stopMarker = new google.maps.Marker({
         position: { lat: s.lat, lng: s.lng }, map: liveMapInstance,
         icon: { path: google.maps.SymbolPath.CIRCLE, scale: 7, fillColor: '#F59E0B', fillOpacity: 1, strokeColor: '#fff', strokeWeight: 2 },
         title: `${name} — stopped ${Math.round(s.durationMin)} min (${timeFmtShort(s.start)}–${timeFmtShort(s.end)})`
       });
+      stopMarker.addListener('click', () => openInfo(stopMarker, `
+        <div style="font-family:inherit;padding:2px 4px;">
+          <div style="font-weight:700;color:${color};margin-bottom:3px;">${escapeHtml(name)}</div>
+          <div style="font-size:12.5px;color:#475569;">Stopped ${Math.round(s.durationMin)} min (${timeFmtShort(s.start)}–${timeFmtShort(s.end)})</div>
+        </div>
+      `));
       liveMapMarkers.push(stopMarker);
     });
 
@@ -1206,7 +1253,13 @@ async function loadLiveMap(){
 }
 
 /* ---------------- Expense claims (manager only) ---------------- */
+function setClaimEmployeeFilter(name){
+  claimEmployeeFilter = name;
+  loadClaims();
+}
+
 let claimFilter = 'pending';
+let claimEmployeeFilter = 'all'; // 'all' or a specific employee name
 
 async function loadClaims(){
   // Fetch ALL claims for the totals summary (independent of the current filter)
@@ -1221,14 +1274,28 @@ async function loadClaims(){
   let query = supabaseClient.from('expense_claims').select('*').eq('team', session.team)
     .order('submitted_at', { ascending: false });
   if (claimFilter !== 'all') query = query.eq('status', claimFilter);
+  if (claimEmployeeFilter !== 'all') query = query.eq('employee_name', claimEmployeeFilter);
   const { data } = await query;
 
   const container = document.getElementById('claimsList');
+
+  // Employee filter dropdown, generated fresh each time from the current employee list.
+  const empNamesForFilter = [...new Set((allClaims || []).map(c => c.employee_name))].sort();
+  const employeeFilterHtml = `
+    <div style="margin-bottom:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+      <label style="font-size:12.5px;color:var(--text-muted);font-weight:600;">Employee:</label>
+      <select id="claimEmployeeFilterSelect" style="padding:7px 10px;border-radius:8px;border:1.5px solid var(--border);font-size:13px;" onchange="setClaimEmployeeFilter(this.value)">
+        <option value="all" ${claimEmployeeFilter === 'all' ? 'selected' : ''}>All employees</option>
+        ${empNamesForFilter.map(n => `<option value="${escapeHtml(n)}" ${claimEmployeeFilter === n ? 'selected' : ''}>${escapeHtml(n)}</option>`).join('')}
+      </select>
+    </div>
+  `;
+
   if (!data || !data.length){
-    container.innerHTML = '<div class="empty-state">No claims here.</div>';
+    container.innerHTML = employeeFilterHtml + '<div class="empty-state">No claims here.</div>';
     return;
   }
-  container.innerHTML = data.map(c => {
+  container.innerHTML = employeeFilterHtml + data.map(c => {
     const personTotal = approvedByPerson[c.employee_name] || 0;
     return `
     <div class="task-item" style="align-items:flex-start;">
@@ -1391,7 +1458,7 @@ async function loadKmReport(){
   const toIso = `${to}T23:59:59`;
 
   const [{ data: locs }, { data: att }] = await Promise.all([
-    supabaseClient.from('location_logs').select('employee_name, latitude, longitude, recorded_at')
+    supabaseClient.from('location_logs').select('employee_name, latitude, longitude, recorded_at, is_suspicious')
       .eq('team', session.team).gte('recorded_at', fromIso).lte('recorded_at', toIso).order('recorded_at', { ascending: true }),
     supabaseClient.from('attendance').select('employee_name, check_in_at, check_out_at, work_date')
       .eq('team', session.team).gte('work_date', from).lte('work_date', to)
@@ -1415,8 +1482,14 @@ async function loadKmReport(){
   const dayRows = [];
   for (const key of allKeys){
     const [name, day] = key.split('||');
-    const pts = (byEmployeeDay[key] || []).sort((a,b) => new Date(a.recorded_at) - new Date(b.recorded_at));
+    const rawPts = (byEmployeeDay[key] || []).sort((a,b) => new Date(a.recorded_at) - new Date(b.recorded_at));
     const a = attByKey[key];
+
+    // Drop flagged spoofed/impossible-speed points before doing anything else,
+    // then run the same jitter/stop cleaning the Live Map uses — otherwise GPS
+    // drift while standing still gets counted as real distance travelled.
+    const nonSuspicious = rawPts.filter(p => !p.is_suspicious);
+    const { cleaned: pts } = detectStops(nonSuspicious, 15, 40);
 
     let km = 0;
     for (let i = 1; i < pts.length; i++){
