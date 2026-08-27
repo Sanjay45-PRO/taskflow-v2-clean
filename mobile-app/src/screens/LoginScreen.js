@@ -30,6 +30,12 @@ export default function LoginScreen({ navigation }) {
       // A cached session only ever gets written after this device was approved —
       // but the backend is still the source of truth, so re-check every open in
       // case a manager has revoked this device since the last launch.
+      //
+      // IMPORTANT: only a DEFINITIVE "revoked" or "not approved" answer from the
+      // server forces a re-login. A network failure or unreachable server does
+      // NOT log the person out — we trust the cached session and let them keep
+      // working, since punishing a weak-signal moment with a forced logout is
+      // worse than occasionally missing a revoke check for a few minutes.
       try {
         const session = JSON.parse(saved);
         const device_id = await getDeviceId();
@@ -37,18 +43,29 @@ export default function LoginScreen({ navigation }) {
           action: 'check_device', team: session.team, employee_name: session.name, device_id,
           device_name: getDeviceName(), platform: getPlatform(), app_version: getAppVersion(),
         });
-        if (resp.approved) {
+
+        if (resp && resp.approved) {
           navigation.replace('Home');
+        } else if (resp && resp.revoked) {
+          // Definitive: a manager explicitly revoked this device. Force re-login.
+          await AsyncStorage.removeItem('taskflow-session');
+          setName(session.name || '');
+          setTeam(session.team || '');
+          setCheckingSaved(false);
         } else {
+          // Server reached us and gave a real (non-error) answer, just not yet
+          // approved for some other definitive reason — same treatment as revoked.
           await AsyncStorage.removeItem('taskflow-session');
           setName(session.name || '');
           setTeam(session.team || '');
           setCheckingSaved(false);
         }
       } catch (e) {
-        // network issue — fall back to asking them to sign in again rather than
-        // silently trusting a possibly-revoked local session
-        setCheckingSaved(false);
+        // Network/server unreachable — do NOT log the person out. Trust the
+        // cached session and let them straight into the app; the next
+        // successful check (next app open, or their next check-in) will
+        // catch a real revoke.
+        navigation.replace('Home');
       }
     })();
   }, []);
@@ -97,16 +114,16 @@ export default function LoginScreen({ navigation }) {
 
   if (checkingSaved) {
     return (
-      <View style={[styles.wrap, { justifyContent: 'center', alignItems: 'center' }]}>
-        <ActivityIndicator color="#fff" />
+      <View style={styles.loadingWrap}>
+        <ActivityIndicator size="large" color="#2563EB" />
       </View>
     );
   }
 
   return (
     <View style={styles.wrap}>
-      <Text style={styles.logo}>TaskFlow</Text>
-      <Text style={styles.sub}>Sign in to check in and track your day</Text>
+      <Text style={styles.title}>TaskFlow</Text>
+      <Text style={styles.subtitle}>Sign in to continue</Text>
 
       <TextInput
         style={styles.input}
@@ -117,29 +134,28 @@ export default function LoginScreen({ navigation }) {
       />
       <TextInput
         style={styles.input}
-        placeholder="Team / workspace code"
+        placeholder="Workspace code"
         value={team}
         onChangeText={setTeam}
         autoCapitalize="none"
       />
 
       <TouchableOpacity style={styles.btn} onPress={handleLogin} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Continue</Text>}
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Log In</Text>}
       </TouchableOpacity>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  wrap: { flex: 1, backgroundColor: '#0F172A', justifyContent: 'center', padding: 28 },
-  logo: { fontSize: 30, fontWeight: '800', color: '#fff', textAlign: 'center', marginBottom: 6 },
-  sub: { color: '#94A3B8', textAlign: 'center', marginBottom: 32, fontSize: 14 },
+  loadingWrap: { flex: 1, backgroundColor: '#0F172A', justifyContent: 'center', alignItems: 'center' },
+  wrap: { flex: 1, backgroundColor: '#F8FAFC', justifyContent: 'center', padding: 28 },
+  title: { fontSize: 32, fontWeight: '800', color: '#0F172A', textAlign: 'center', marginBottom: 6 },
+  subtitle: { color: '#64748B', textAlign: 'center', marginBottom: 32, fontSize: 15 },
   input: {
     backgroundColor: '#fff', borderRadius: 12, paddingHorizontal: 16, paddingVertical: 14,
-    fontSize: 15, marginBottom: 14
+    fontSize: 16, marginBottom: 14, borderWidth: 1, borderColor: '#E2E8F0',
   },
-  btn: {
-    backgroundColor: '#2563EB', borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 8
-  },
-  btnText: { color: '#fff', fontWeight: '700', fontSize: 15 }
+  btn: { backgroundColor: '#2563EB', borderRadius: 12, paddingVertical: 15, alignItems: 'center', marginTop: 8 },
+  btnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
 });
