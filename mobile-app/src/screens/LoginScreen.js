@@ -38,6 +38,30 @@ export default function LoginScreen({ navigation }) {
       // worse than occasionally missing a revoke check for a few minutes.
       try {
         const session = JSON.parse(saved);
+
+        // Daily forced re-login: if a fresh sign-in has been requested since this
+        // session was created (e.g. the nightly reset job), send them back to the
+        // login screen — but the device stays approved, so no OTP is needed again,
+        // just re-entering their name and workspace code.
+        try {
+          const { data: settingsRow } = await supabase
+            .from('app_settings').select('last_forced_logout_at').eq('id', 1).maybeSingle();
+          if (settingsRow && settingsRow.last_forced_logout_at && session.loggedInAt) {
+            const forcedAt = new Date(settingsRow.last_forced_logout_at).getTime();
+            const loggedInAt = new Date(session.loggedInAt).getTime();
+            if (forcedAt > loggedInAt) {
+              await AsyncStorage.removeItem('taskflow-session');
+              setName(session.name || '');
+              setTeam(session.team || '');
+              setCheckingSaved(false);
+              return;
+            }
+          }
+        } catch (e) {
+          // Couldn't check the daily-reset setting — don't block login over this,
+          // just fall through to the normal device-approval check below.
+        }
+
         const device_id = await getDeviceId();
         const resp = await callDeviceAuth({
           action: 'check_device', team: session.team, employee_name: session.name, device_id,
@@ -100,7 +124,7 @@ export default function LoginScreen({ navigation }) {
       setLoading(false);
 
       if (resp.approved) {
-        const session = { name: data.name, team: data.team, email: data.email || '' };
+        const session = { name: data.name, team: data.team, email: data.email || '', loggedInAt: new Date().toISOString() };
         await AsyncStorage.setItem('taskflow-session', JSON.stringify(session));
         navigation.replace('Home');
       } else {

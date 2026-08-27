@@ -1026,7 +1026,7 @@ function detectStops(pts, stopThresholdMin = 15, radiusMeters = 40){
 // Snaps raw GPS points onto actual roads using OSRM's free public routing service.
 // Falls back to the raw straight-line points if the request fails or times out.
 async function snapToRoads(latlngs){
-  if (latlngs.length < 2) return latlngs;
+  if (latlngs.length < 2) return { path: latlngs, distanceKm: null };
   let sample = latlngs;
   if (sample.length > 100){
     const step = Math.ceil(sample.length / 100);
@@ -1037,12 +1037,15 @@ async function snapToRoads(latlngs){
     const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`, { signal: AbortSignal.timeout(6000) });
     const data = await res.json();
     if (data.code === 'Ok' && data.routes && data.routes[0]){
-      return data.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng]);
+      return {
+        path: data.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng]),
+        distanceKm: data.routes[0].distance / 1000, // OSRM returns meters — this is the real road-network distance
+      };
     }
   } catch (e) {
     console.warn('Road snapping unavailable, showing direct path instead', e);
   }
-  return latlngs;
+  return { path: latlngs, distanceKm: null };
 }
 
 let liveMapAutoRefresh = null;
@@ -1127,7 +1130,7 @@ async function loadLiveMap(){
     const latlngs = pts.map(p => [p.latitude, p.longitude]);
     const color = MAP_COLORS[colorIdx % MAP_COLORS.length];
 
-    const roadPath = await snapToRoads(latlngs);
+    const { path: roadPath, distanceKm: roadDistanceKm } = await snapToRoads(latlngs);
     const polyline = new google.maps.Polyline({
       path: roadPath.map(([lat, lng]) => ({ lat, lng })),
       geodesic: true, strokeColor: color, strokeOpacity: 0.85, strokeWeight: 4
@@ -1188,9 +1191,17 @@ async function loadLiveMap(){
       liveMapMarkers.push(stopMarker);
     });
 
-    let distanceKm = 0;
-    for (let j = 1; j < pts.length; j++){
-      distanceKm += haversineKm(pts[j-1].latitude, pts[j-1].longitude, pts[j].latitude, pts[j].longitude);
+    // Prefer the routing engine's actual road-network distance — it accounts for
+    // real turns and curves, unlike a straight-line sum between logged GPS points.
+    // Fall back to the straight-line estimate only if the routing service was unreachable.
+    let distanceKm;
+    if (roadDistanceKm !== null && roadDistanceKm !== undefined){
+      distanceKm = roadDistanceKm;
+    } else {
+      distanceKm = 0;
+      for (let j = 1; j < pts.length; j++){
+        distanceKm += haversineKm(pts[j-1].latitude, pts[j-1].longitude, pts[j].latitude, pts[j].longitude);
+      }
     }
 
     const suspiciousPts = rawPts.filter(p => p.is_suspicious);
@@ -1453,7 +1464,7 @@ async function loadKmReport(){
   const container = document.getElementById('kmReportTable');
   if (!from || !to){ container.innerHTML = '<div class="empty-state">Pick a start and end date.</div>'; return; }
 
-  container.innerHTML = '<div class="empty-state">Loading… (fetching place names, this can take a moment for long ranges)</div>';
+  container.innerHTML = '<div class="empty-state">Loading… (fetching place names and real road distances, this can take a moment for long ranges)</div>';
 
   const fromIso = `${from}T00:00:00`;
   const toIso = `${to}T23:59:59`;
@@ -1492,9 +1503,19 @@ async function loadKmReport(){
     const nonSuspicious = rawPts.filter(p => !p.is_suspicious);
     const { cleaned: pts } = detectStops(nonSuspicious, 15, 40);
 
-    let km = 0;
-    for (let i = 1; i < pts.length; i++){
-      km += haversineKm(pts[i-1].latitude, pts[i-1].longitude, pts[i].latitude, pts[i].longitude);
+    // Prefer the routing engine's real road distance, same as the Live Map —
+    // falls back to straight-line if the routing service is slow/unreachable
+    // (kept resilient here since a report can cover many employee-days at once).
+    let km;
+    const latlngsForRoute = pts.map(p => [p.latitude, p.longitude]);
+    const { distanceKm: roadKm } = await snapToRoads(latlngsForRoute);
+    if (roadKm !== null && roadKm !== undefined){
+      km = roadKm;
+    } else {
+      km = 0;
+      for (let i = 1; i < pts.length; i++){
+        km += haversineKm(pts[i-1].latitude, pts[i-1].longitude, pts[i].latitude, pts[i].longitude);
+      }
     }
     let hrs = 0;
     if (a && a.check_in_at){
