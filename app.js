@@ -1025,25 +1025,45 @@ function detectStops(pts, stopThresholdMin = 15, radiusMeters = 40){
 
 // Snaps raw GPS points onto actual roads using OSRM's free public routing service.
 // Falls back to the raw straight-line points if the request fails or times out.
+function decodePolyline(encoded){
+  let points = [], index = 0, lat = 0, lng = 0;
+  while (index < encoded.length){
+    let b, shift = 0, result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
+    shift = 0; result = 0;
+    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
+    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
+    points.push([lat / 1e5, lng / 1e5]);
+  }
+  return points;
+}
+
 async function snapToRoads(latlngs){
   if (latlngs.length < 2) return { path: latlngs, distanceKm: null };
+  // Google Directions API allows a max of 25 total stops (origin + destination + 23 waypoints)
   let sample = latlngs;
-  if (sample.length > 100){
-    const step = Math.ceil(sample.length / 100);
+  if (sample.length > 23){
+    const step = Math.ceil(sample.length / 23);
     sample = latlngs.filter((_, i) => i % step === 0 || i === latlngs.length - 1);
   }
-  const coordStr = sample.map(([lat, lng]) => `${lng},${lat}`).join(';');
+  const origin = `${sample[0][0]},${sample[0][1]}`;
+  const destination = `${sample[sample.length-1][0]},${sample[sample.length-1][1]}`;
+  const waypoints = sample.slice(1, -1).map(([lat,lng]) => `${lat},${lng}`).join('|');
   try {
-    const res = await fetch(`https://router.project-osrm.org/route/v1/driving/${coordStr}?overview=full&geometries=geojson`, { signal: AbortSignal.timeout(6000) });
+    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypoints ? `&waypoints=${waypoints}` : ''}&key=AIzaSyDO1EYYqd5X8C_N_HSJ9L5XFJbcSTzDyzU`;
+    const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     const data = await res.json();
-    if (data.code === 'Ok' && data.routes && data.routes[0]){
+    if (data.status === 'OK' && data.routes && data.routes[0]){
+      const route = data.routes[0];
       return {
-        path: data.routes[0].geometry.coordinates.map(([lng, lat]) => [lat, lng]),
-        distanceKm: data.routes[0].distance / 1000, // OSRM returns meters — this is the real road-network distance
+        path: decodePolyline(route.overview_polyline.points),
+        distanceKm: route.legs.reduce((sum, leg) => sum + leg.distance.value, 0) / 1000,
       };
     }
+    console.warn('Directions API returned no route:', data.status);
   } catch (e) {
-    console.warn('Road snapping unavailable, showing direct path instead', e);
+    console.warn('Directions API unavailable, showing direct path instead', e);
   }
   return { path: latlngs, distanceKm: null };
 }
