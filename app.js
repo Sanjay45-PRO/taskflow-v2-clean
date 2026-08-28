@@ -1130,8 +1130,9 @@ async function loadLiveMap(){
     const latlngs = pts.map(p => [p.latitude, p.longitude]);
     const color = MAP_COLORS[colorIdx % MAP_COLORS.length];
 
+    const { path: roadPath } = await snapToRoads(latlngs);
     const polyline = new google.maps.Polyline({
-      path: latlngs.map(([lat, lng]) => ({ lat, lng })),
+      path: roadPath.map(([lat, lng]) => ({ lat, lng })),
       geodesic: true, strokeColor: color, strokeOpacity: 0.85, strokeWeight: 4
     });
     polyline.setMap(liveMapInstance);
