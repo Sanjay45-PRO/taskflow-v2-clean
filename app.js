@@ -1025,45 +1025,30 @@ function detectStops(pts, stopThresholdMin = 15, radiusMeters = 40){
 
 // Snaps raw GPS points onto actual roads using OSRM's free public routing service.
 // Falls back to the raw straight-line points if the request fails or times out.
-function decodePolyline(encoded){
-  let points = [], index = 0, lat = 0, lng = 0;
-  while (index < encoded.length){
-    let b, shift = 0, result = 0;
-    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lat += (result & 1) ? ~(result >> 1) : (result >> 1);
-    shift = 0; result = 0;
-    do { b = encoded.charCodeAt(index++) - 63; result |= (b & 0x1f) << shift; shift += 5; } while (b >= 0x20);
-    lng += (result & 1) ? ~(result >> 1) : (result >> 1);
-    points.push([lat / 1e5, lng / 1e5]);
-  }
-  return points;
-}
-
 async function snapToRoads(latlngs){
   if (latlngs.length < 2) return { path: latlngs, distanceKm: null };
-  // Directions API allows a max of 25 total stops (origin + destination + 23 waypoints)
+  // Roads API allows up to 100 points per request.
   let sample = latlngs;
-  if (sample.length > 23){
-    const step = Math.ceil(sample.length / 23);
+  if (sample.length > 100){
+    const step = Math.ceil(sample.length / 100);
     sample = latlngs.filter((_, i) => i % step === 0 || i === latlngs.length - 1);
   }
-  const origin = `${sample[0][0]},${sample[0][1]}`;
-  const destination = `${sample[sample.length-1][0]},${sample[sample.length-1][1]}`;
-  const waypoints = sample.slice(1, -1).map(([lat,lng]) => `${lat},${lng}`).join('|');
+  const path = sample.map(([lat, lng]) => `${lat},${lng}`).join('|');
   try {
-    const url = `https://maps.googleapis.com/maps/api/directions/json?origin=${origin}&destination=${destination}${waypoints ? `&waypoints=${waypoints}` : ''}&key=AIzaSyDO1EYYqd5X8C_N_HSJ9L5XFJbcSTzDyzU`;
+    const url = `https://roads.googleapis.com/v1/snapToRoads?path=${path}&interpolate=true&key=AIzaSyDO1EYYqd5X8C_N_HSJ9L5XFJbcSTzDyzU`;
     const res = await fetch(url, { signal: AbortSignal.timeout(8000) });
     const data = await res.json();
-    if (data.status === 'OK' && data.routes && data.routes[0]){
-      const route = data.routes[0];
-      return {
-        path: decodePolyline(route.overview_polyline.points),
-        distanceKm: route.legs.reduce((sum, leg) => sum + leg.distance.value, 0) / 1000,
-      };
+    if (data.snappedPoints && data.snappedPoints.length){
+      const snappedPath = data.snappedPoints.map(p => [p.location.latitude, p.location.longitude]);
+      let distanceKm = 0;
+      for (let i = 1; i < snappedPath.length; i++){
+        distanceKm += haversineKm(snappedPath[i-1][0], snappedPath[i-1][1], snappedPath[i][0], snappedPath[i][1]);
+      }
+      return { path: snappedPath, distanceKm };
     }
-    console.warn('Directions API returned no route:', data.status);
+    console.warn('Roads API returned no snapped points:', data.error?.message || data);
   } catch (e) {
-    console.warn('Directions API unavailable, showing direct path instead', e);
+    console.warn('Roads API unavailable, showing direct path instead', e);
   }
   return { path: latlngs, distanceKm: null };
 }
