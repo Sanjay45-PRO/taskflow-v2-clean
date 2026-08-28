@@ -1130,9 +1130,8 @@ async function loadLiveMap(){
     const latlngs = pts.map(p => [p.latitude, p.longitude]);
     const color = MAP_COLORS[colorIdx % MAP_COLORS.length];
 
-    const { path: roadPath, distanceKm: roadDistanceKm } = await snapToRoads(latlngs);
     const polyline = new google.maps.Polyline({
-      path: roadPath.map(([lat, lng]) => ({ lat, lng })),
+      path: latlngs.map(([lat, lng]) => ({ lat, lng })),
       geodesic: true, strokeColor: color, strokeOpacity: 0.85, strokeWeight: 4
     });
     polyline.setMap(liveMapInstance);
@@ -1191,19 +1190,17 @@ async function loadLiveMap(){
       liveMapMarkers.push(stopMarker);
     });
 
-    // Prefer the routing engine's actual road-network distance — it accounts for
-    // real turns and curves, unlike a straight-line sum between logged GPS points.
-    // Fall back to the straight-line estimate only if the routing service was unreachable.
-    let distanceKm;
-    if (roadDistanceKm !== null && roadDistanceKm !== undefined){
-      distanceKm = roadDistanceKm;
-    } else {
-      distanceKm = 0;
-      for (let j = 1; j < pts.length; j++){
-        distanceKm += haversineKm(pts[j-1].latitude, pts[j-1].longitude, pts[j].latitude, pts[j].longitude);
-      }
+    // Straight-line distance between the actual recorded GPS points. A car-routing
+    // engine was tried here but produces wrong results for foot/on-site travel
+    // (it can pick a different one-way path each direction, or guess the wrong
+    // road entirely) — this reflects only where the phone actually was.
+    // Skip any distance segment touching a flagged "spoofed" point — it stays on
+    // the map so the route still looks connected, but never counts toward km.
+    let distanceKm = 0;
+    for (let j = 1; j < pts.length; j++){
+      if (pts[j-1].is_suspicious || pts[j].is_suspicious) continue;
+      distanceKm += haversineKm(pts[j-1].latitude, pts[j-1].longitude, pts[j].latitude, pts[j].longitude);
     }
-
     const suspiciousPts = rawPts.filter(p => p.is_suspicious);
 
     const att = attByName[name];
@@ -1464,7 +1461,7 @@ async function loadKmReport(){
   const container = document.getElementById('kmReportTable');
   if (!from || !to){ container.innerHTML = '<div class="empty-state">Pick a start and end date.</div>'; return; }
 
-  container.innerHTML = '<div class="empty-state">Loading… (fetching place names and real road distances, this can take a moment for long ranges)</div>';
+  container.innerHTML = '<div class="empty-state">Loading… (fetching place names, this can take a moment for long ranges)</div>';
 
   const fromIso = `${from}T00:00:00`;
   const toIso = `${to}T23:59:59`;
@@ -1500,22 +1497,14 @@ async function loadKmReport(){
     // Drop flagged spoofed/impossible-speed points before doing anything else,
     // then run the same jitter/stop cleaning the Live Map uses — otherwise GPS
     // drift while standing still gets counted as real distance travelled.
-    const nonSuspicious = rawPts.filter(p => !p.is_suspicious);
-    const { cleaned: pts } = detectStops(nonSuspicious, 15, 40);
+    const { cleaned: pts } = detectStops(rawPts, 15, 40);
 
-    // Prefer the routing engine's real road distance, same as the Live Map —
-    // falls back to straight-line if the routing service is slow/unreachable
-    // (kept resilient here since a report can cover many employee-days at once).
-    let km;
-    const latlngsForRoute = pts.map(p => [p.latitude, p.longitude]);
-    const { distanceKm: roadKm } = await snapToRoads(latlngsForRoute);
-    if (roadKm !== null && roadKm !== undefined){
-      km = roadKm;
-    } else {
-      km = 0;
-      for (let i = 1; i < pts.length; i++){
-        km += haversineKm(pts[i-1].latitude, pts[i-1].longitude, pts[i].latitude, pts[i].longitude);
-      }
+    // Straight-line distance between real GPS points — skip any segment touching
+    // a flagged "spoofed" point, so it never counts toward km, same as Live Map.
+    let km = 0;
+    for (let i = 1; i < pts.length; i++){
+      if (pts[i-1].is_suspicious || pts[i].is_suspicious) continue;
+      km += haversineKm(pts[i-1].latitude, pts[i-1].longitude, pts[i].latitude, pts[i].longitude);
     }
     let hrs = 0;
     if (a && a.check_in_at){
